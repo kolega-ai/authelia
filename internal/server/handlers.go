@@ -85,7 +85,7 @@ func handleError(cpath string) func(ctx *fasthttp.RequestCtx, err error) {
 
 		logging.Logger().WithFields(logrus.Fields{
 			logging.FieldMethod:     string(ctx.Method()),
-			logging.FieldPath:       string(ctx.Path()),
+			logging.FieldPath:       logging.SanitizePath(string(ctx.Path())),
 			logging.FieldRemoteIP:   getRemoteIP(ctx),
 			logging.FieldStatusCode: statusCode,
 		}).WithError(err).Error(message)
