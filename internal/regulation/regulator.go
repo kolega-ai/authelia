@@ -2,7 +2,13 @@ package regulation
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/authelia/authelia/v4/internal/clock"
@@ -37,9 +43,15 @@ func (r *Regulator) HandleAttempt(ctx Context, successful, banned bool, username
 		RequestMethod: requestMethod,
 	}
 
-	var err error
-	if err = r.store.AppendAuthenticationLog(ctx, attempt); err != nil {
-		ctx.GetLogger().WithFields(map[string]any{fieldUsername: username, "successful": successful}).WithError(err).Errorf("Failed to record %s authentication attempt", authType)
+	// Enhanced authentication logging with robust error handling
+	if err := r.logAuthenticationAttemptRobustly(ctx, attempt, authType, username, successful); err != nil {
+		// Log the error but continue processing - authentication flow should not be blocked
+		// unless it's a critical logging failure that indicates a severe security issue
+		ctx.GetLogger().WithFields(map[string]any{
+			fieldUsername: username,
+			"successful":  successful,
+			"error_type":  classifyLoggingError(err),
+		}).WithError(err).Errorf("Authentication logging experienced degraded operation for %s authentication attempt", authType)
 	}
 
 	// We only need to perform the ban checks when; the attempt is unsuccessful, there is not an effective ban in place,
@@ -190,4 +202,172 @@ loop:
 	expires := failures[0].Time.Add(r.config.BanTime)
 
 	return &expires
+}
+
+// logAuthenticationAttemptRobustly implements robust authentication logging with retry mechanisms
+// and fallback strategies to address CWE-778 (Insufficient Error Handling in Authentication Logging).
+func (r *Regulator) logAuthenticationAttemptRobustly(ctx Context, attempt model.AuthenticationAttempt, authType, username string, successful bool) error {
+	// Attempt primary logging with retry logic for transient failures
+	var lastErr error
+	err := utils.RunFuncWithRetry(3, 100*time.Millisecond, func() error {
+		lastErr = r.store.AppendAuthenticationLog(ctx, attempt)
+		// Only retry on transient errors
+		if lastErr != nil && classifyLoggingError(lastErr) == "transient" {
+			return lastErr
+		}
+		// For persistent errors or success, don't retry
+		return nil
+	})
+
+	// Use the actual database error for analysis, not the retry wrapper error
+	if lastErr != nil {
+		err = lastErr
+	}
+
+	if err == nil {
+		return nil
+	}
+
+	// Classify the error to determine appropriate handling strategy
+	errorType := classifyLoggingError(err)
+	logger := ctx.GetLogger().WithFields(map[string]any{
+		fieldUsername:  username,
+		"successful":   successful,
+		"auth_type":    authType,
+		"error_type":   errorType,
+		"remote_ip":    attempt.RemoteIP,
+		"request_uri":  attempt.RequestURI,
+	})
+
+	// For transient errors, we've already retried - log the persistent failure
+	if errorType == "transient" {
+		logger.WithError(err).Warning("Authentication logging failed after retries - transient database issue detected")
+	} else {
+		logger.WithError(err).Error("Authentication logging failed - persistent database issue detected")
+	}
+
+	// Attempt fallback logging to ensure audit trail continuity
+	fallbackErr := r.fallbackAuthenticationLog(ctx, attempt, authType)
+	if fallbackErr == nil {
+		logger.Info("Authentication attempt successfully logged to fallback storage")
+		return nil
+	}
+
+	// If even fallback logging fails, this indicates a critical system issue
+	logger.WithError(fallbackErr).Error("Critical: Both primary and fallback authentication logging failed")
+
+	// For critical security logging failures, we still continue the authentication flow
+	// but ensure the failure is properly escalated for monitoring/alerting
+	return fmt.Errorf("authentication logging failure: primary error: %w, fallback error: %v", err, fallbackErr)
+}
+
+// fallbackAuthenticationLog provides file-based fallback logging for authentication attempts
+// when primary database logging fails, ensuring audit trail continuity.
+func (r *Regulator) fallbackAuthenticationLog(ctx Context, attempt model.AuthenticationAttempt, authType string) error {
+	// Create fallback log directory if it doesn't exist
+	fallbackDir := "/var/log/authelia/auth-fallback"
+	if err := os.MkdirAll(fallbackDir, 0700); err != nil {
+		return fmt.Errorf("failed to create fallback log directory: %w", err)
+	}
+
+	// Create date-based log file with secure permissions
+	logFileName := fmt.Sprintf("auth-fallback-%s.log", attempt.Time.Format("2006-01-02"))
+	logFilePath := filepath.Join(fallbackDir, logFileName)
+
+	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to open fallback log file: %w", err)
+	}
+	defer logFile.Close()
+
+	// Create structured log entry with all critical authentication information
+	logEntry := map[string]any{
+		"timestamp":       attempt.Time.Format(time.RFC3339Nano),
+		"successful":      attempt.Successful,
+		"banned":          attempt.Banned,
+		"username":        attempt.Username,
+		"auth_type":       authType,
+		"remote_ip":       attempt.RemoteIP,
+		"request_uri":     attempt.RequestURI,
+		"request_method":  attempt.RequestMethod,
+		"fallback_reason": "primary_logging_failure",
+		"context": map[string]any{
+			"remote_ip_raw": ctx.RemoteIP().String(),
+		},
+	}
+
+	// Write JSON-formatted log entry
+	encoder := json.NewEncoder(logFile)
+	if err := encoder.Encode(logEntry); err != nil {
+		return fmt.Errorf("failed to write fallback log entry: %w", err)
+	}
+
+	// Force synchronization to disk to ensure data persistence
+	if err := logFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync fallback log file: %w", err)
+	}
+
+	return nil
+}
+
+// classifyLoggingError determines whether a logging error is transient (suitable for retry)
+// or persistent (requiring alternative handling strategies).
+func classifyLoggingError(err error) string {
+	if err == nil {
+		return "none"
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// Transient errors that may resolve with retry
+	transientIndicators := []string{
+		"connection refused",
+		"connection reset",
+		"timeout",
+		"temporary failure",
+		"too many connections",
+		"connection lost",
+		"network unreachable",
+		"connection timed out",
+		"deadlock",
+		"lock wait timeout",
+	}
+
+	for _, indicator := range transientIndicators {
+		if strings.Contains(errStr, indicator) {
+			return "transient"
+		}
+	}
+
+	// Check for specific network-related errors
+	if netErr, ok := err.(net.Error); ok && netErr.Temporary() {
+		return "transient"
+	}
+
+	// Check for specific system call errors that might be transient
+	if err == syscall.ECONNREFUSED || err == syscall.ECONNRESET || err == syscall.ETIMEDOUT {
+		return "transient"
+	}
+
+	// Persistent errors that require alternative strategies
+	persistentIndicators := []string{
+		"permission denied",
+		"no space left on device",
+		"read-only file system",
+		"disk full",
+		"database is locked",
+		"constraint violation",
+		"invalid syntax",
+		"table doesn't exist",
+		"column doesn't exist",
+	}
+
+	for _, indicator := range persistentIndicators {
+		if strings.Contains(errStr, indicator) {
+			return "persistent"
+		}
+	}
+
+	// Default to persistent for unknown errors to trigger appropriate handling
+	return "persistent"
 }
