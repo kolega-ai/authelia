@@ -38,8 +38,9 @@ func (r *Regulator) HandleAttempt(ctx Context, successful, banned bool, username
 	}
 
 	var err error
-	if err = r.store.AppendAuthenticationLog(ctx, attempt); err != nil {
-		ctx.GetLogger().WithFields(map[string]any{fieldUsername: username, "successful": successful}).WithError(err).Errorf("Failed to record %s authentication attempt", authType)
+	if err = r.recordAuthenticationAttemptWithRetry(ctx, attempt, username, successful, authType); err != nil {
+		// Logging is handled within the retry function
+		// Continue with regulation logic despite logging failure
 	}
 
 	// We only need to perform the ban checks when; the attempt is unsuccessful, there is not an effective ban in place,
@@ -160,6 +161,88 @@ func (r *Regulator) BanCheck(ctx Context, username string) (ban BanType, value s
 	}
 
 	return BanTypeNone, "", nil, nil
+}
+
+// recordAuthenticationAttemptWithRetry provides resilient authentication logging with retry mechanism
+// to address CWE-778 (Insufficient Logging) vulnerability by ensuring authentication attempts are recorded
+// even in the face of transient failures.
+func (r *Regulator) recordAuthenticationAttemptWithRetry(ctx Context, attempt model.AuthenticationAttempt, username string, successful bool, authType string) error {
+	// Use retry mechanism for transient failures (3 attempts with 100ms delay)
+	retryErr := utils.RunFuncWithRetry(3, 100*time.Millisecond, func() error {
+		return r.store.AppendAuthenticationLog(ctx, attempt)
+	})
+
+	if retryErr == nil {
+		return nil
+	}
+
+	// Categorize the error for enhanced observability
+	errCategory := r.categorizeAuthLogError(retryErr)
+
+	// Enhanced logging with comprehensive context for security analysis
+	logger := ctx.GetLogger().WithFields(map[string]any{
+		fieldUsername:    username,
+		"successful":     successful,
+		"auth_type":      authType,
+		"error_category": errCategory,
+		"attempt_time":   attempt.Time,
+		"remote_ip":      attempt.RemoteIP,
+		"request_uri":    attempt.RequestURI,
+		"request_method": attempt.RequestMethod,
+		"retry_attempted": true,
+	})
+
+	switch errCategory {
+	case "transient":
+		logger.WithError(retryErr).Warnf("Transient failure recording %s authentication attempt after retries - monitoring required", authType)
+	case "connection":
+		logger.WithError(retryErr).Errorf("Database connection failure recording %s authentication attempt - critical infrastructure issue", authType)
+	case "permanent":
+		logger.WithError(retryErr).Errorf("Permanent failure recording %s authentication attempt - requires immediate investigation", authType)
+	default:
+		logger.WithError(retryErr).Errorf("Unknown failure recording %s authentication attempt after retries - investigation needed", authType)
+	}
+
+	return retryErr
+}
+
+// categorizeAuthLogError categorizes authentication logging errors to provide better context
+// for troubleshooting and incident response.
+func (r *Regulator) categorizeAuthLogError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	errStr := err.Error()
+
+	// Network/connection errors that might be transient
+	if strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "no such host") ||
+		strings.Contains(errStr, "network is unreachable") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "connection timeout") {
+		return "connection"
+	}
+
+	// Database errors that are likely transient
+	if strings.Contains(errStr, "database is locked") ||
+		strings.Contains(errStr, "too many connections") ||
+		strings.Contains(errStr, "deadlock") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "temporary failure") {
+		return "transient"
+	}
+
+	// Permanent errors requiring immediate attention
+	if strings.Contains(errStr, "constraint violation") ||
+		strings.Contains(errStr, "invalid column") ||
+		strings.Contains(errStr, "syntax error") ||
+		strings.Contains(errStr, "table doesn't exist") ||
+		strings.Contains(errStr, "permission denied") {
+		return "permanent"
+	}
+
+	return "unknown"
 }
 
 func (r *Regulator) expires(since time.Time, records []model.RegulationRecord) *time.Time {
