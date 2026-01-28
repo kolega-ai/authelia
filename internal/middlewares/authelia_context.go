@@ -31,11 +31,11 @@ func NewRequestLogger(ctx *fasthttp.RequestCtx) (entry *logrus.Entry) {
 	fields := logrus.Fields{
 		logging.FieldMethod:   string(ctx.Method()),
 		logging.FieldRemoteIP: RequestCtxRemoteIP(ctx).String(),
-		logging.FieldPath:     string(ctx.Path()),
+		logging.FieldPath:     logging.SanitizePath(string(ctx.Path())),
 	}
 
 	if uri, ok := ctx.UserValue(UserValueKeyRawURI).(string); ok {
-		fields[logging.FieldPathRaw] = uri
+		fields[logging.FieldPathRaw] = logging.SanitizeURL(uri)
 	}
 
 	return logging.Logger().WithFields(fields)
