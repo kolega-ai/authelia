@@ -28,11 +28,13 @@ func (d *Production) Call(ctx *middlewares.AutheliaCtx, userSession *session.Use
 		return nil, err
 	}
 
-	ctx.Logger.Tracef("Duo endpoint: %s response raw data for %s from IP %s: %s", path, userSession.Username, ctx.RemoteIP().String(), string(body))
-
 	if err = json.Unmarshal(body, &response); err != nil {
 		return nil, err
 	}
+
+	// Log only non-sensitive metadata instead of raw response body to prevent credential exposure
+	ctx.Logger.Tracef("Duo endpoint: %s response for user %s from IP %s - Status: %s, Code: %d, Response size: %d bytes", 
+		path, userSession.Username, ctx.RemoteIP().String(), response.Stat, response.Code, len(body))
 
 	if response.Stat == "FAIL" {
 		ctx.Logger.Warnf(
