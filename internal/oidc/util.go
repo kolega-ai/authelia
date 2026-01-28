@@ -255,6 +255,7 @@ func RFC6750Header(realm, scope string, err *oauthelia2.RFC6749Error) string {
 }
 
 // AccessResponderToClearMap returns a clear friendly map copy of the responder map values.
+// This function masks all sensitive OAuth2/OIDC fields to prevent token leakage in logs.
 func AccessResponderToClearMap(r oauthelia2.AccessResponder) map[string]any {
 	if r == nil {
 		return nil
@@ -265,19 +266,210 @@ func AccessResponderToClearMap(r oauthelia2.AccessResponder) map[string]any {
 	data := make(map[string]any, len(m))
 
 	for key, value := range r.ToMap() {
-		switch key {
-		case "access_token":
-			data[key] = "authelia_at_**************"
-		case "refresh_token":
-			data[key] = "authelia_rt_**************"
-		case "id_token":
-			data[key] = "*********.***********.*************"
-		default:
-			data[key] = value
-		}
+		data[key] = maskSensitiveOAuth2Field(key, value)
 	}
 
 	return data
+}
+
+// maskSensitiveOAuth2Field masks sensitive OAuth2/OIDC fields based on field name and content patterns.
+// It implements a comprehensive approach to prevent sensitive data exposure in logs.
+func maskSensitiveOAuth2Field(key string, value any) any {
+	// Handle nil values
+	if value == nil {
+		return nil
+	}
+
+	// Convert value to string for processing
+	valueStr, ok := value.(string)
+	if !ok {
+		// For non-string values, check if the key itself is sensitive
+		if isSensitiveFieldName(key) {
+			return "****_masked_non_string_value"
+		}
+		return value
+	}
+
+	// Handle known sensitive OAuth2/OIDC fields with specific masks
+	switch key {
+	case "access_token":
+		return "authelia_at_**************"
+	case "refresh_token":
+		return "authelia_rt_**************"
+	case "id_token":
+		return maskJWTValue(valueStr)
+	case "code":
+		return "authz_code_**********"
+	case "state":
+		return "state_********"
+	case "device_code":
+		return "device_********"
+	case "user_code":
+		return "user_****"
+	case "session_state", "sid":
+		return "session_********"
+	case "client_assertion":
+		return maskJWTValue(valueStr)
+	case "client_assertion_type":
+		return "client_auth_method_****"
+	case "nonce":
+		return "nonce_****"
+	case "jti":
+		return "jwt_id_****"
+	case "dpop_jkt":
+		return "dpop_thumbprint_****"
+	case "verification_uri_complete":
+		return maskUriWithParams(valueStr)
+	}
+
+	// Check if field name contains sensitive patterns
+	if isSensitiveFieldName(key) {
+		return fmt.Sprintf("%s_****", key)
+	}
+
+	// Check if value appears to contain sensitive data
+	if isSensitiveValue(valueStr) {
+		return "sensitive_value_****"
+	}
+
+	// Fields that are safe to log in clear text
+	if isSafeFieldName(key) {
+		return value
+	}
+
+	// For unknown fields, apply heuristic checks
+	if len(valueStr) > 50 || isBase64Like(valueStr) {
+		return "unknown_field_****"
+	}
+
+	return value
+}
+
+// isSensitiveFieldName checks if a field name indicates sensitive content
+func isSensitiveFieldName(fieldName string) bool {
+	fieldLower := strings.ToLower(fieldName)
+	
+	sensitivePatterns := []string{
+		"token", "code", "secret", "key", "assertion", 
+		"state", "session", "password", "credential",
+		"authorization", "auth", "bearer", "signature",
+		"hash", "digest", "nonce", "salt", "proof",
+	}
+
+	for _, pattern := range sensitivePatterns {
+		if strings.Contains(fieldLower, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isSafeFieldName checks if a field name is known to be safe for logging
+func isSafeFieldName(fieldName string) bool {
+	safeFields := []string{
+		"token_type", "expires_in", "scope", "error", 
+		"error_description", "error_uri", "grant_type",
+		"response_type", "client_id", "redirect_uri",
+		"prompt", "display", "ui_locales", "claims_locales",
+		"acr_values", "response_mode", "max_age",
+	}
+
+	for _, safe := range safeFields {
+		if strings.EqualFold(fieldName, safe) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isSensitiveValue applies heuristics to detect if a value contains sensitive data
+func isSensitiveValue(value string) bool {
+	// Very long strings without spaces might be tokens/codes
+	if len(value) > 100 && !strings.Contains(value, " ") {
+		return true
+	}
+
+	// Base64-encoded values longer than 30 chars might be sensitive
+	if len(value) > 30 && isBase64Like(value) {
+		return true
+	}
+
+	// Strings that look like UUIDs or random identifiers
+	if len(value) >= 32 && isRandomIdentifierLike(value) {
+		return true
+	}
+
+	return false
+}
+
+// isBase64Like checks if a string appears to be base64 encoded
+func isBase64Like(s string) bool {
+	if len(s) < 4 {
+		return false
+	}
+	
+	// Base64 strings typically have mostly alphanumeric chars with + / = padding
+	base64Chars := 0
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || 
+		   (r >= '0' && r <= '9') || r == '+' || r == '/' || r == '=' || r == '-' || r == '_' {
+			base64Chars++
+		}
+	}
+	
+	// If most characters are base64-like, consider it base64
+	return float64(base64Chars)/float64(len(s)) > 0.9
+}
+
+// isRandomIdentifierLike checks if a string looks like a random identifier
+func isRandomIdentifierLike(s string) bool {
+	if len(s) < 16 {
+		return false
+	}
+	
+	// Count different character types
+	letters, digits, others := 0, 0, 0
+	for _, r := range s {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			letters++
+		case r >= '0' && r <= '9':
+			digits++
+		case r == '-' || r == '_':
+			others++
+		default:
+			return false // Invalid characters for typical identifiers
+		}
+	}
+	
+	// Random identifiers typically have a good mix of letters and numbers
+	total := len(s)
+	return letters > 0 && digits > 0 && (letters+digits+others) == total && 
+		   float64(letters)/float64(total) > 0.3 && float64(digits)/float64(total) > 0.2
+}
+
+// maskJWTValue masks JWT tokens while preserving their structure for debugging
+func maskJWTValue(token string) string {
+	if !strings.Contains(token, ".") {
+		return "non_jwt_token_****"
+	}
+	
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "malformed_jwt_****"
+	}
+	
+	return "*********.***********.*************"
+}
+
+// maskUriWithParams masks URIs that may contain sensitive parameters
+func maskUriWithParams(uri string) string {
+	if strings.Contains(uri, "?") {
+		return strings.Split(uri, "?")[0] + "?****_masked_params"
+	}
+	return uri
 }
 
 // HydrateClientCredentialsFlowSessionWithAccessRequest is used to configure a session when performing a client credentials grant.
