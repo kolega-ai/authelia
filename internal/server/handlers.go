@@ -421,8 +421,14 @@ func RegisterOpenIDConnectRoutes(r *router.Router, config *schema.Configuration,
 		WithEnabled(utils.IsStringInSlice(oidc.EndpointAuthorization, config.IdentityProviders.OIDC.CORS.Endpoints)).
 		Build()
 
-	authorizationGET := middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointAuthorization), policyCORSAuthorization.Middleware(bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2AuthorizationGET))))
-	authorizationPOST := policyCORSAuthorization.Middleware(bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2AuthorizationPOST)))
+	// Apply rate limiting to OAuth2 authorization endpoints
+	rateLimitedBridgeAuth := middlewares.NewBridgeBuilder(*config, providers).WithPreMiddlewares(
+		middlewares.SecurityHeadersBase, middlewares.SecurityHeadersCSPNoneOpenIDConnect, middlewares.SecurityHeadersNoStore,
+		middlewares.NewRateLimit(config.Server.Endpoints.RateLimits.OAuth2Authorization),
+	).Build()
+
+	authorizationGET := middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointAuthorization), policyCORSAuthorization.Middleware(rateLimitedBridgeAuth(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2AuthorizationGET))))
+	authorizationPOST := policyCORSAuthorization.Middleware(rateLimitedBridgeAuth(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2AuthorizationPOST)))
 
 	r.OPTIONS(oidc.EndpointPathAuthorization, policyCORSAuthorization.HandleOnlyOPTIONS)
 	r.GET(oidc.EndpointPathAuthorization, authorizationGET)
@@ -434,9 +440,15 @@ func RegisterOpenIDConnectRoutes(r *router.Router, config *schema.Configuration,
 		WithEnabled(utils.IsStringInSlice(oidc.EndpointDeviceAuthorization, config.IdentityProviders.OIDC.CORS.Endpoints)).
 		Build()
 
+	// Apply rate limiting to OAuth2 device authorization endpoints
+	rateLimitedBridgeDeviceAuth := middlewares.NewBridgeBuilder(*config, providers).WithPreMiddlewares(
+		middlewares.SecurityHeadersBase, middlewares.SecurityHeadersCSPNoneOpenIDConnect, middlewares.SecurityHeadersNoStore,
+		middlewares.NewRateLimit(config.Server.Endpoints.RateLimits.OAuth2DeviceAuthorization),
+	).Build()
+
 	r.OPTIONS(oidc.EndpointPathDeviceAuthorization, policyCORSDeviceAuthorization.HandleOnlyOPTIONS)
-	r.POST(oidc.EndpointPathDeviceAuthorization, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointDeviceAuthorization), policyCORSDeviceAuthorization.Middleware(bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2DeviceAuthorizationPOST)))))
-	r.PUT(oidc.EndpointPathDeviceAuthorization, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointDeviceAuthorization), bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2DeviceAuthorizationPUT))))
+	r.POST(oidc.EndpointPathDeviceAuthorization, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointDeviceAuthorization), policyCORSDeviceAuthorization.Middleware(rateLimitedBridgeDeviceAuth(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2DeviceAuthorizationPOST)))))
+	r.PUT(oidc.EndpointPathDeviceAuthorization, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointDeviceAuthorization), rateLimitedBridgeDeviceAuth(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2DeviceAuthorizationPUT))))
 
 	policyCORSPAR := middlewares.NewCORSPolicyBuilder().
 		WithAllowedMethods(fasthttp.MethodOptions, fasthttp.MethodPost).
@@ -444,8 +456,14 @@ func RegisterOpenIDConnectRoutes(r *router.Router, config *schema.Configuration,
 		WithEnabled(utils.IsStringInSliceFold(oidc.EndpointPushedAuthorizationRequest, config.IdentityProviders.OIDC.CORS.Endpoints)).
 		Build()
 
+	// Apply rate limiting to OAuth2 PAR endpoint
+	rateLimitedBridgePAR := middlewares.NewBridgeBuilder(*config, providers).WithPreMiddlewares(
+		middlewares.SecurityHeadersBase, middlewares.SecurityHeadersCSPNoneOpenIDConnect, middlewares.SecurityHeadersNoStore,
+		middlewares.NewRateLimit(config.Server.Endpoints.RateLimits.OAuth2PAR),
+	).Build()
+
 	r.OPTIONS(oidc.EndpointPathPushedAuthorizationRequest, policyCORSPAR.HandleOnlyOPTIONS)
-	r.POST(oidc.EndpointPathPushedAuthorizationRequest, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointPushedAuthorizationRequest), policyCORSPAR.Middleware(bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2PushedAuthorizationRequest)))))
+	r.POST(oidc.EndpointPathPushedAuthorizationRequest, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointPushedAuthorizationRequest), policyCORSPAR.Middleware(rateLimitedBridgePAR(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2PushedAuthorizationRequest)))))
 
 	policyCORSToken := middlewares.NewCORSPolicyBuilder().
 		WithAllowCredentials(true).
@@ -454,8 +472,14 @@ func RegisterOpenIDConnectRoutes(r *router.Router, config *schema.Configuration,
 		WithEnabled(utils.IsStringInSlice(oidc.EndpointToken, config.IdentityProviders.OIDC.CORS.Endpoints)).
 		Build()
 
+	// Apply rate limiting to OAuth2 token endpoint
+	rateLimitedBridgeToken := middlewares.NewBridgeBuilder(*config, providers).WithPreMiddlewares(
+		middlewares.SecurityHeadersBase, middlewares.SecurityHeadersCSPNoneOpenIDConnect, middlewares.SecurityHeadersNoStore,
+		middlewares.NewRateLimit(config.Server.Endpoints.RateLimits.OAuth2Token),
+	).Build()
+
 	r.OPTIONS(oidc.EndpointPathToken, policyCORSToken.HandleOPTIONS)
-	r.POST(oidc.EndpointPathToken, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointToken), policyCORSToken.Middleware(bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2TokenPOST)))))
+	r.POST(oidc.EndpointPathToken, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointToken), policyCORSToken.Middleware(rateLimitedBridgeToken(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2TokenPOST)))))
 
 	policyCORSUserinfo := middlewares.NewCORSPolicyBuilder().
 		WithAllowCredentials(true).
@@ -464,9 +488,15 @@ func RegisterOpenIDConnectRoutes(r *router.Router, config *schema.Configuration,
 		WithEnabled(utils.IsStringInSlice(oidc.EndpointUserinfo, config.IdentityProviders.OIDC.CORS.Endpoints)).
 		Build()
 
+	// Apply rate limiting to OAuth2 userinfo endpoint
+	rateLimitedBridgeUserinfo := middlewares.NewBridgeBuilder(*config, providers).WithPreMiddlewares(
+		middlewares.SecurityHeadersBase, middlewares.SecurityHeadersCSPNoneOpenIDConnect, middlewares.SecurityHeadersNoStore,
+		middlewares.NewRateLimit(config.Server.Endpoints.RateLimits.OAuth2Userinfo),
+	).Build()
+
 	r.OPTIONS(oidc.EndpointPathUserinfo, policyCORSUserinfo.HandleOPTIONS)
-	r.GET(oidc.EndpointPathUserinfo, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointUserinfo), policyCORSUserinfo.Middleware(bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OpenIDConnectUserinfo)))))
-	r.POST(oidc.EndpointPathUserinfo, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointUserinfo), policyCORSUserinfo.Middleware(bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OpenIDConnectUserinfo)))))
+	r.GET(oidc.EndpointPathUserinfo, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointUserinfo), policyCORSUserinfo.Middleware(rateLimitedBridgeUserinfo(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OpenIDConnectUserinfo)))))
+	r.POST(oidc.EndpointPathUserinfo, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointUserinfo), policyCORSUserinfo.Middleware(rateLimitedBridgeUserinfo(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OpenIDConnectUserinfo)))))
 
 	policyCORSIntrospection := middlewares.NewCORSPolicyBuilder().
 		WithAllowCredentials(true).
@@ -475,8 +505,14 @@ func RegisterOpenIDConnectRoutes(r *router.Router, config *schema.Configuration,
 		WithEnabled(utils.IsStringInSlice(oidc.EndpointIntrospection, config.IdentityProviders.OIDC.CORS.Endpoints)).
 		Build()
 
+	// Apply rate limiting to OAuth2 introspection endpoint
+	rateLimitedBridgeIntrospection := middlewares.NewBridgeBuilder(*config, providers).WithPreMiddlewares(
+		middlewares.SecurityHeadersBase, middlewares.SecurityHeadersCSPNoneOpenIDConnect, middlewares.SecurityHeadersNoStore,
+		middlewares.NewRateLimit(config.Server.Endpoints.RateLimits.OAuth2Introspection),
+	).Build()
+
 	r.OPTIONS(oidc.EndpointPathIntrospection, policyCORSIntrospection.HandleOPTIONS)
-	r.POST(oidc.EndpointPathIntrospection, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointIntrospection), policyCORSIntrospection.Middleware(bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2IntrospectionPOST)))))
+	r.POST(oidc.EndpointPathIntrospection, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointIntrospection), policyCORSIntrospection.Middleware(rateLimitedBridgeIntrospection(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2IntrospectionPOST)))))
 
 	policyCORSRevocation := middlewares.NewCORSPolicyBuilder().
 		WithAllowCredentials(true).
@@ -485,8 +521,14 @@ func RegisterOpenIDConnectRoutes(r *router.Router, config *schema.Configuration,
 		WithEnabled(utils.IsStringInSlice(oidc.EndpointRevocation, config.IdentityProviders.OIDC.CORS.Endpoints)).
 		Build()
 
+	// Apply rate limiting to OAuth2 revocation endpoint
+	rateLimitedBridgeRevocation := middlewares.NewBridgeBuilder(*config, providers).WithPreMiddlewares(
+		middlewares.SecurityHeadersBase, middlewares.SecurityHeadersCSPNoneOpenIDConnect, middlewares.SecurityHeadersNoStore,
+		middlewares.NewRateLimit(config.Server.Endpoints.RateLimits.OAuth2Revocation),
+	).Build()
+
 	r.OPTIONS(oidc.EndpointPathRevocation, policyCORSRevocation.HandleOPTIONS)
-	r.POST(oidc.EndpointPathRevocation, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointRevocation), policyCORSRevocation.Middleware(bridge(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2RevocationPOST)))))
+	r.POST(oidc.EndpointPathRevocation, middlewares.Wrap(middlewares.NewMetricsRequestOpenIDConnect(providers.Metrics, oidc.EndpointRevocation), policyCORSRevocation.Middleware(rateLimitedBridgeRevocation(middlewares.NewHTTPToAutheliaHandlerAdaptor(handlers.OAuth2RevocationPOST)))))
 }
 
 func handlerMetrics(path string) fasthttp.RequestHandler {
