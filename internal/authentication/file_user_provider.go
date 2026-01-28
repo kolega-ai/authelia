@@ -32,6 +32,11 @@ type FileUserProvider struct {
 
 // NewFileUserProvider creates a new instance of FileUserProvider.
 func NewFileUserProvider(config *schema.AuthenticationBackendFile) (provider *FileUserProvider) {
+	// Ensure password policy defaults are set
+	if config.PasswordPolicy.MinLength == 0 {
+		config.PasswordPolicy = schema.DefaultPasswordPolicyConfig
+	}
+
 	return &FileUserProvider{
 		config:        config,
 		timeoutReload: time.Now().Add(-1 * time.Second),
@@ -171,6 +176,7 @@ func (p *FileUserProvider) ChangePassword(username string, oldPassword string, n
 		return ErrUserNotFound
 	}
 
+	// Basic input validation
 	if strings.TrimSpace(newPassword) == "" {
 		return ErrPasswordWeak
 	}
@@ -179,6 +185,7 @@ func (p *FileUserProvider) ChangePassword(username string, oldPassword string, n
 		return ErrPasswordWeak
 	}
 
+	// Verify old password
 	oldPasswordCorrect, err := p.CheckUserPassword(username, oldPassword)
 	if err != nil {
 		return ErrAuthenticationFailed
@@ -186,6 +193,21 @@ func (p *FileUserProvider) ChangePassword(username string, oldPassword string, n
 
 	if !oldPasswordCorrect {
 		return ErrIncorrectPassword
+	}
+
+	// Apply comprehensive password policy validation
+	validator, err := NewPasswordValidator(&p.config.PasswordPolicy)
+	if err != nil {
+		return fmt.Errorf("%w : failed to initialize password validator: %v", ErrOperationFailed, err)
+	}
+
+	ctx := ValidationContext{
+		Username:    username,
+		OldPassword: oldPassword,
+	}
+
+	if err := validator.Validate(newPassword, ctx); err != nil {
+		return err
 	}
 
 	var digest algorithm.Digest
