@@ -1029,3 +1029,206 @@ func WithDatabase(t *testing.T, content []byte, f func(path string)) {
 
 	require.NoError(t, db.Close())
 }
+
+func TestShouldChangePassword(t *testing.T) {
+	WithDatabase(t, UserDatabaseContent, func(path string) {
+		config := DefaultFileAuthenticationBackendConfiguration
+		config.Path = path
+
+		provider := NewFileUserProvider(&config)
+
+		assert.NoError(t, provider.StartupCheck())
+
+		// Should successfully change password with default policy
+		err := provider.ChangePassword("john", "password", "NewSecure123!")
+		assert.NoError(t, err)
+
+		// Verify new password works
+		ok, err := provider.CheckUserPassword("john", "NewSecure123!")
+		assert.NoError(t, err)
+		assert.True(t, ok)
+
+		// Verify old password no longer works
+		ok, err = provider.CheckUserPassword("john", "password")
+		assert.NoError(t, err)
+		assert.False(t, ok)
+	})
+}
+
+func TestShouldRejectWeakPasswordsInChangePassword(t *testing.T) {
+	WithDatabase(t, UserDatabaseContent, func(path string) {
+		config := DefaultFileAuthenticationBackendConfiguration
+		config.Path = path
+
+		provider := NewFileUserProvider(&config)
+
+		assert.NoError(t, provider.StartupCheck())
+
+		testCases := []struct {
+			name        string
+			newPassword string
+			description string
+		}{
+			{
+				name:        "TooShort",
+				newPassword: "Abc1!",
+				description: "Password too short",
+			},
+			{
+				name:        "NoUppercase",
+				newPassword: "mynewsecure123!",
+				description: "Missing uppercase letter",
+			},
+			{
+				name:        "NoLowercase",
+				newPassword: "MYNEWSECURE123!",
+				description: "Missing lowercase letter",
+			},
+			{
+				name:        "NoNumbers",
+				newPassword: "MyNewSecure!",
+				description: "Missing numbers",
+			},
+			{
+				name:        "CommonPassword",
+				newPassword: "password123",
+				description: "Common weak password",
+			},
+			{
+				name:        "SimilarToUsername",
+				newPassword: "john123!ABC",
+				description: "Password contains username",
+			},
+			{
+				name:        "SameAsOld",
+				newPassword: "password",
+				description: "Same as old password",
+			},
+			{
+				name:        "EmptyPassword",
+				newPassword: "",
+				description: "Empty password",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				err := provider.ChangePassword("john", "password", tc.newPassword)
+				assert.Error(t, err, "Expected error for: %s", tc.description)
+				assert.ErrorIs(t, err, ErrPasswordWeak, "Should return ErrPasswordWeak")
+
+				// Verify old password still works (password wasn't changed)
+				ok, err := provider.CheckUserPassword("john", "password")
+				assert.NoError(t, err)
+				assert.True(t, ok)
+			})
+		}
+	})
+}
+
+func TestShouldHandleWrongOldPasswordInChangePassword(t *testing.T) {
+	WithDatabase(t, UserDatabaseContent, func(path string) {
+		config := DefaultFileAuthenticationBackendConfiguration
+		config.Path = path
+
+		provider := NewFileUserProvider(&config)
+
+		assert.NoError(t, provider.StartupCheck())
+
+		err := provider.ChangePassword("john", "wrongoldpassword", "NewSecure123!")
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrIncorrectPassword)
+
+		// Verify password wasn't changed
+		ok, err := provider.CheckUserPassword("john", "password")
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	})
+}
+
+func TestShouldHandleNonexistentUserInChangePassword(t *testing.T) {
+	WithDatabase(t, UserDatabaseContent, func(path string) {
+		config := DefaultFileAuthenticationBackendConfiguration
+		config.Path = path
+
+		provider := NewFileUserProvider(&config)
+
+		assert.NoError(t, provider.StartupCheck())
+
+		err := provider.ChangePassword("nonexistent", "password", "NewSecure123!")
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrUserNotFound)
+	})
+}
+
+func TestShouldHandleDisabledUserInChangePassword(t *testing.T) {
+	WithDatabase(t, UserDatabaseContent, func(path string) {
+		config := DefaultFileAuthenticationBackendConfiguration
+		config.Path = path
+
+		provider := NewFileUserProvider(&config)
+
+		assert.NoError(t, provider.StartupCheck())
+
+		err := provider.ChangePassword("dis", "password", "NewSecure123!")
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrUserNotFound)
+	})
+}
+
+func TestShouldUseCustomPasswordPolicy(t *testing.T) {
+	WithDatabase(t, UserDatabaseContent, func(path string) {
+		config := DefaultFileAuthenticationBackendConfiguration
+		config.Path = path
+		// Set a more restrictive password policy
+		config.PasswordPolicy = schema.AuthenticationBackendFilePasswordPolicy{
+			MinLength:            12,
+			MaxLength:            50,
+			RequireUppercase:     true,
+			RequireLowercase:     true,
+			RequireNumber:        true,
+			RequireSpecial:       true,
+			MinScore:             5,
+			CheckCommonPasswords: true,
+		}
+
+		provider := NewFileUserProvider(&config)
+
+		assert.NoError(t, provider.StartupCheck())
+
+		// Should reject password that would pass default policy but fails custom policy
+		err := provider.ChangePassword("john", "password", "MySecure123")
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrPasswordWeak) // Missing special character
+
+		// Should accept password that meets custom policy
+		err = provider.ChangePassword("john", "password", "MyVerySecure123!@#")
+		assert.NoError(t, err)
+
+		// Verify new password works
+		ok, err := provider.CheckUserPassword("john", "MyVerySecure123!@#")
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	})
+}
+
+func TestShouldUseDefaultPasswordPolicy(t *testing.T) {
+	WithDatabase(t, UserDatabaseContent, func(path string) {
+		config := DefaultFileAuthenticationBackendConfiguration
+		config.Path = path
+		// Don't explicitly set password policy - should use defaults
+
+		provider := NewFileUserProvider(&config)
+
+		assert.NoError(t, provider.StartupCheck())
+
+		// Should reject password that fails default policy (missing number)
+		err := provider.ChangePassword("john", "password", "MySecurePass!")
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrPasswordWeak)
+
+		// Should accept password that meets default policy
+		err = provider.ChangePassword("john", "password", "MySecure123")
+		assert.NoError(t, err)
+	})
+}

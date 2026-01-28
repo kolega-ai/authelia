@@ -307,6 +307,22 @@ func (p *LDAPUserProvider) ChangePassword(username, oldPassword string, newPassw
 		return ErrPasswordWeak
 	}
 
+	// Apply comprehensive password policy validation
+	// Use default policy since LDAP config doesn't have password policy settings
+	validator, err := NewPasswordValidator(&schema.DefaultPasswordPolicyConfig)
+	if err != nil {
+		return fmt.Errorf("%w : failed to initialize password validator: %v", ErrOperationFailed, err)
+	}
+
+	ctx := ValidationContext{
+		Username:    username,
+		OldPassword: oldPassword,
+	}
+
+	if err := validator.Validate(newPassword, ctx); err != nil {
+		return err
+	}
+
 	if err = p.setPassword(client, profile, username, oldPassword, newPassword); err != nil {
 		if errorCode := getLDAPResultCode(err); errorCode != -1 {
 			switch errorCode {

@@ -36,9 +36,11 @@ type AuthenticationBackendFile struct {
 
 	Password AuthenticationBackendFilePassword `koanf:"password" yaml:"password,omitempty" toml:"password,omitempty" json:"password,omitempty" jsonschema:"title=Password Options" jsonschema_description:"Allows configuration of the password hashing options when the user passwords are changed directly by Authelia."`
 
+	PasswordPolicy AuthenticationBackendFilePasswordPolicy `koanf:"password_policy" yaml:"password_policy,omitempty" toml:"password_policy,omitempty" json:"password_policy,omitempty" jsonschema:"title=Password Policy" jsonschema_description:"Configures the password policy validation rules for password changes."`
+
 	Search AuthenticationBackendFileSearch `koanf:"search" yaml:"search,omitempty" toml:"search,omitempty" json:"search,omitempty" jsonschema:"title=Search" jsonschema_description:"Configures the user searching behaviour."`
 
-	ExtraAttributes map[string]AuthenticationBackendExtraAttribute `koanf:"extra_attributes" yaml:"extra_attributes,omitempty" toml:"extra_attributes,omitempty" json:"extra_attributes,omitempty" jsonschema:"title=Extra Attributes" jsonschema_description:"Configures the extra attributes available in expressions and other areas of Authelia."`
+	ExtraAttributes map[string]AuthenticationBackendExtraAttribute `koanf:"extra_attributes" yaml:"extra_attributes,omitempty" toml:"extra_attributes,omitempty" json:"extra_attributes,omitempty" jsonschema:"title=Extra Attributes" jsonschema_description="Configures the extra attributes available in expressions and other areas of Authelia."`
 }
 
 type AuthenticationBackendExtraAttribute struct {
@@ -379,4 +381,28 @@ var DefaultLDAPAuthenticationBackendConfigurationImplementationGLAuth = Authenti
 	TLS: &TLS{
 		MinimumVersion: TLSVersion{tls.VersionTLS12},
 	},
+}
+
+// AuthenticationBackendFilePasswordPolicy represents the configuration related to password policy validation.
+type AuthenticationBackendFilePasswordPolicy struct {
+	MinLength            int      `koanf:"min_length" yaml:"min_length" toml:"min_length" json:"min_length" jsonschema:"default=8,minimum=1,maximum=256,title=Minimum Length" jsonschema_description:"The minimum length required for passwords."`
+	MaxLength            int      `koanf:"max_length" yaml:"max_length" toml:"max_length" json:"max_length" jsonschema:"default=128,minimum=1,maximum=2147483647,title=Maximum Length" jsonschema_description:"The maximum length allowed for passwords."`
+	RequireUppercase     bool     `koanf:"require_uppercase" yaml:"require_uppercase" toml:"require_uppercase" json:"require_uppercase" jsonschema:"default=true,title=Require Uppercase" jsonschema_description:"Require at least one uppercase letter."`
+	RequireLowercase     bool     `koanf:"require_lowercase" yaml:"require_lowercase" toml:"require_lowercase" json:"require_lowercase" jsonschema:"default=true,title=Require Lowercase" jsonschema_description:"Require at least one lowercase letter."`
+	RequireNumber        bool     `koanf:"require_number" yaml:"require_number" toml:"require_number" json:"require_number" jsonschema:"default=true,title=Require Number" jsonschema_description:"Require at least one number."`
+	RequireSpecial       bool     `koanf:"require_special" yaml:"require_special" toml:"require_special" json:"require_special" jsonschema:"default=false,title=Require Special Character" jsonschema_description:"Require at least one special character."`
+	MinScore             int      `koanf:"min_score" yaml:"min_score" toml:"min_score" json:"min_score" jsonschema:"default=3,minimum=0,maximum=10,title=Minimum Score" jsonschema_description:"The minimum strength score required for passwords (0-10)."`
+	CheckCommonPasswords bool     `koanf:"check_common_passwords" yaml:"check_common_passwords" toml:"check_common_passwords" json:"check_common_passwords" jsonschema:"default=true,title=Check Common Passwords" jsonschema_description:"Check against common weak passwords list."`
+}
+
+// DefaultPasswordPolicyConfig represents the default password policy configuration.
+var DefaultPasswordPolicyConfig = AuthenticationBackendFilePasswordPolicy{
+	MinLength:            8,
+	MaxLength:            128,
+	RequireUppercase:     true,
+	RequireLowercase:     true,
+	RequireNumber:        true,
+	RequireSpecial:       false,
+	MinScore:             3,
+	CheckCommonPasswords: true,
 }

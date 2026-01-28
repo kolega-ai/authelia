@@ -75,6 +75,7 @@ func validateFileAuthenticationBackend(config *schema.AuthenticationBackendFile,
 	}
 
 	ValidatePasswordConfiguration(&config.Password, validator)
+	validatePasswordPolicyConfiguration(&config.PasswordPolicy, validator)
 }
 
 // ValidatePasswordConfiguration validates the file auth backend password configuration.
@@ -582,5 +583,20 @@ func validateLDAPGroupFilter(config *schema.AuthenticationBackend, validator *sc
 
 	if (pMemberOfDN || pMemberOfRDN) && config.LDAP.Attributes.MemberOf == "" {
 		validator.Push(fmt.Errorf(errFmtLDAPAuthBackendFilterMissingAttribute, "member_of", utils.StringJoinOr([]string{"{memberof:rdn}", "{memberof:dn}"})))
+	}
+}
+
+// validatePasswordPolicyConfiguration validates the password policy configuration.
+func validatePasswordPolicyConfiguration(config *schema.AuthenticationBackendFilePasswordPolicy, validator *schema.StructValidator) {
+	if config.MinLength < 1 {
+		validator.Push(errors.New("password_policy minimum length must be at least 1"))
+	}
+
+	if config.MaxLength < config.MinLength {
+		validator.Push(errors.New("password_policy maximum length must be greater than or equal to minimum length"))
+	}
+
+	if config.MinScore < 0 || config.MinScore > 10 {
+		validator.Push(errors.New("password_policy minimum score must be between 0 and 10"))
 	}
 }
