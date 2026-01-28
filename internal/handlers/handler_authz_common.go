@@ -29,6 +29,11 @@ func handleAuthzPortalURLFromHeader(ctx *middlewares.AutheliaCtx) (portalURL *ur
 		return nil, err
 	}
 
+	if !ctx.IsSafeRedirectionTargetURI(portalURL) {
+		ctx.Logger.Debugf("Redirection URL %s from X-Authelia-URL header is not safe", portalURL.String())
+		return nil, fmt.Errorf("unsafe redirection target: %s", portalURL.String())
+	}
+
 	return portalURL, nil
 }
 
@@ -42,6 +47,11 @@ func handleAuthzPortalURLFromQuery(ctx *middlewares.AutheliaCtx) (portalURL *url
 		return nil, err
 	}
 
+	if !ctx.IsSafeRedirectionTargetURI(portalURL) {
+		ctx.Logger.Debugf("Redirection URL %s from authelia_url query parameter is not safe", portalURL.String())
+		return nil, fmt.Errorf("unsafe redirection target: %s", portalURL.String())
+	}
+
 	return portalURL, nil
 }
 
@@ -53,6 +63,11 @@ func handleAuthzPortalURLFromQueryLegacy(ctx *middlewares.AutheliaCtx) (portalUR
 
 	if portalURL, err = url.ParseRequestURI(string(rawURL)); err != nil {
 		return nil, err
+	}
+
+	if !ctx.IsSafeRedirectionTargetURI(portalURL) {
+		ctx.Logger.Debugf("Redirection URL %s from rd query parameter is not safe", portalURL.String())
+		return nil, fmt.Errorf("unsafe redirection target: %s", portalURL.String())
 	}
 
 	return portalURL, nil
