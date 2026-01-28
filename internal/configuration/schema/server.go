@@ -62,6 +62,15 @@ type ServerEndpointRateLimits struct {
 	SecondFactorDuo        ServerEndpointRateLimit `koanf:"second_factor_duo" yaml:"second_factor_duo,omitempty" toml:"second_factor_duo,omitempty" json:"second_factor_duo,omitempty"`
 	SessionElevationStart  ServerEndpointRateLimit `koanf:"session_elevation_start" yaml:"session_elevation_start,omitempty" toml:"session_elevation_start,omitempty" json:"session_elevation_start,omitempty"`
 	SessionElevationFinish ServerEndpointRateLimit `koanf:"session_elevation_finish" yaml:"session_elevation_finish,omitempty" toml:"session_elevation_finish,omitempty" json:"session_elevation_finish,omitempty"`
+
+	// OAuth2/OIDC endpoints rate limits
+	OAuth2Token              ServerEndpointRateLimit `koanf:"oauth2_token" yaml:"oauth2_token,omitempty" toml:"oauth2_token,omitempty" json:"oauth2_token,omitempty" jsonschema:"title=OAuth2 Token Endpoint" jsonschema_description:"Rate limiting configuration for the OAuth2 token endpoint (/api/oidc/token)."`
+	OAuth2Authorization      ServerEndpointRateLimit `koanf:"oauth2_authorization" yaml:"oauth2_authorization,omitempty" toml:"oauth2_authorization,omitempty" json:"oauth2_authorization,omitempty" jsonschema:"title=OAuth2 Authorization Endpoint" jsonschema_description:"Rate limiting configuration for the OAuth2 authorization endpoint (/api/oidc/authorization)."`
+	OAuth2DeviceAuthorization ServerEndpointRateLimit `koanf:"oauth2_device_authorization" yaml:"oauth2_device_authorization,omitempty" toml:"oauth2_device_authorization,omitempty" json:"oauth2_device_authorization,omitempty" jsonschema:"title=OAuth2 Device Authorization Endpoint" jsonschema_description:"Rate limiting configuration for the OAuth2 device authorization endpoint (/api/oidc/device-authorization)."`
+	OAuth2PAR                ServerEndpointRateLimit `koanf:"oauth2_par" yaml:"oauth2_par,omitempty" toml:"oauth2_par,omitempty" json:"oauth2_par,omitempty" jsonschema:"title=OAuth2 PAR Endpoint" jsonschema_description:"Rate limiting configuration for the OAuth2 Pushed Authorization Request endpoint (/api/oidc/pushed-authorization-request)."`
+	OAuth2Introspection      ServerEndpointRateLimit `koanf:"oauth2_introspection" yaml:"oauth2_introspection,omitempty" toml:"oauth2_introspection,omitempty" json:"oauth2_introspection,omitempty" jsonschema:"title=OAuth2 Introspection Endpoint" jsonschema_description:"Rate limiting configuration for the OAuth2 token introspection endpoint (/api/oidc/introspection)."`
+	OAuth2Revocation         ServerEndpointRateLimit `koanf:"oauth2_revocation" yaml:"oauth2_revocation,omitempty" toml:"oauth2_revocation,omitempty" json:"oauth2_revocation,omitempty" jsonschema:"title=OAuth2 Revocation Endpoint" jsonschema_description:"Rate limiting configuration for the OAuth2 token revocation endpoint (/api/oidc/revocation)."`
+	OAuth2Userinfo           ServerEndpointRateLimit `koanf:"oauth2_userinfo" yaml:"oauth2_userinfo,omitempty" toml:"oauth2_userinfo,omitempty" json:"oauth2_userinfo,omitempty" jsonschema:"title=OAuth2 Userinfo Endpoint" jsonschema_description:"Rate limiting configuration for the OAuth2 userinfo endpoint (/api/oidc/userinfo)."`
 }
 
 type ServerEndpointRateLimit struct {
@@ -175,6 +184,49 @@ var DefaultServerConfiguration = Server{
 					{Period: 1, Requests: 3},  // 3 requests per 1.0x of identity_validation.elevated_session.elevation_lifespan.
 					{Period: 2, Requests: 5},  // 5 requests per 2.0x of identity_validation.elevated_session.elevation_lifespan.
 					{Period: 6, Requests: 15}, // 15 requests per 6.0x of identity_validation.elevated_session.elevation_lifespan.
+				},
+			},
+			// OAuth2/OIDC endpoints default rate limits
+			OAuth2Token: ServerEndpointRateLimit{
+				Buckets: []ServerEndpointRateLimitBucket{
+					{Period: time.Minute, Requests: 15}, // 15 requests per minute per IP - protects against brute force while allowing legitimate token exchanges
+					{Period: time.Hour, Requests: 100},   // 100 requests per hour per IP - allows for reasonable burst capacity
+				},
+			},
+			OAuth2Authorization: ServerEndpointRateLimit{
+				Buckets: []ServerEndpointRateLimitBucket{
+					{Period: time.Minute, Requests: 30}, // 30 requests per minute per IP - interactive user flows need more flexibility
+					{Period: time.Hour, Requests: 200},   // 200 requests per hour per IP - supports multiple app authorizations
+				},
+			},
+			OAuth2DeviceAuthorization: ServerEndpointRateLimit{
+				Buckets: []ServerEndpointRateLimitBucket{
+					{Period: time.Minute, Requests: 5},  // 5 requests per minute per IP - device setup happens infrequently
+					{Period: time.Hour, Requests: 20},    // 20 requests per hour per IP - multiple device registrations
+				},
+			},
+			OAuth2PAR: ServerEndpointRateLimit{
+				Buckets: []ServerEndpointRateLimitBucket{
+					{Period: time.Minute, Requests: 10}, // 10 requests per minute per IP - server-initiated authorization requests
+					{Period: time.Hour, Requests: 100},   // 100 requests per hour per IP - reasonable for automated flows
+				},
+			},
+			OAuth2Introspection: ServerEndpointRateLimit{
+				Buckets: []ServerEndpointRateLimitBucket{
+					{Period: time.Minute, Requests: 60}, // 60 requests per minute per IP - resource servers may validate many tokens
+					{Period: time.Hour, Requests: 1000},  // 1000 requests per hour per IP - high-volume token validation
+				},
+			},
+			OAuth2Revocation: ServerEndpointRateLimit{
+				Buckets: []ServerEndpointRateLimitBucket{
+					{Period: time.Minute, Requests: 10}, // 10 requests per minute per IP - revocation is infrequent
+					{Period: time.Hour, Requests: 50},    // 50 requests per hour per IP - prevents mass revocation attacks
+				},
+			},
+			OAuth2Userinfo: ServerEndpointRateLimit{
+				Buckets: []ServerEndpointRateLimitBucket{
+					{Period: time.Minute, Requests: 30}, // 30 requests per minute per IP - may be called frequently by SPAs
+					{Period: time.Hour, Requests: 300},   // 300 requests per hour per IP - profile updates and refreshes
 				},
 			},
 		},
