@@ -555,9 +555,61 @@ func (ctx *AutheliaCtx) AcceptsMIME(mime string) (acceptsMime bool) {
 	return false
 }
 
+// isValidRedirectURI validates if a URI is safe for redirection.
+func (ctx *AutheliaCtx) isValidRedirectURI(uri string) bool {
+	// Empty or whitespace-only URIs are not valid
+	if uri == "" || strings.TrimSpace(uri) == "" {
+		return false
+	}
+
+	// Allow relative paths that don't start with // (protocol-relative URLs)
+	if strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, "//") {
+		return true
+	}
+
+	// Parse absolute URLs for validation
+	targetURI, err := url.Parse(uri)
+	if err != nil {
+		ctx.Logger.Debugf("Failed to parse redirect URI '%s': %v", uri, err)
+		return false
+	}
+
+	// Block protocol-relative URLs (//example.com) by checking if it parsed as an absolute URL without a scheme
+	if targetURI.Scheme == "" && targetURI.Host != "" {
+		return false
+	}
+
+	// For absolute URLs, use existing safety validation
+	if targetURI.IsAbs() {
+		return ctx.IsSafeRedirectionTargetURI(targetURI)
+	}
+
+	// Allow other relative URLs (relative paths, query-only, fragment-only)
+	return true
+}
+
+// getSafeRedirectFallback returns a safe fallback URL for redirects.
+func (ctx *AutheliaCtx) getSafeRedirectFallback() string {
+	// Try to get the default redirection URL from configuration
+	if defaultURL := ctx.GetDefaultRedirectionURL(); defaultURL != nil {
+		return defaultURL.String()
+	}
+
+	// Fall back to the base path
+	return ctx.BasePathSlash()
+}
+
 // SpecialRedirect performs a redirect similar to fasthttp.RequestCtx except it allows statusCode 401 and includes body
 // content in the form of a link to the location if the request method was not head.
 func (ctx *AutheliaCtx) SpecialRedirect(uri string, statusCode int) {
+	// Validate redirect URI for security
+	if !ctx.isValidRedirectURI(uri) {
+		ctx.Logger.Warnf("Blocked unsafe redirect attempt to '%s' from IP %s", uri, ctx.RemoteIP().String())
+		
+		// Use a safe fallback redirect
+		uri = ctx.getSafeRedirectFallback()
+	}
+
 	var u []byte
 
 	u, statusCode = ctx.setSpecialRedirect(uri, statusCode)
@@ -569,6 +621,14 @@ func (ctx *AutheliaCtx) SpecialRedirect(uri string, statusCode int) {
 // SpecialRedirectNoBody performs a redirect similar to fasthttp.RequestCtx except it allows statusCode 401 and includes
 // no body.
 func (ctx *AutheliaCtx) SpecialRedirectNoBody(uri string, statusCode int) {
+	// Validate redirect URI for security
+	if !ctx.isValidRedirectURI(uri) {
+		ctx.Logger.Warnf("Blocked unsafe redirect attempt to '%s' from IP %s", uri, ctx.RemoteIP().String())
+		
+		// Use a safe fallback redirect
+		uri = ctx.getSafeRedirectFallback()
+	}
+
 	_, _ = ctx.setSpecialRedirect(uri, statusCode)
 }
 
