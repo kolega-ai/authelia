@@ -256,10 +256,6 @@ func (s *HeaderAuthnStrategy) Get(ctx *middlewares.AutheliaCtx, _ *session.Sessi
 	}
 
 	if err != nil {
-		if errors.Is(err, errTokenIntent) {
-			return authn, nil
-		}
-
 		return authn, fmt.Errorf("failed to validate %s header with %s scheme: %w", s.headerAuthorize, scheme, err)
 	}
 
