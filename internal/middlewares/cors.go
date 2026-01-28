@@ -274,9 +274,18 @@ func (p *CORSPolicy) handleCORS(ctx *fasthttp.RequestCtx) {
 	}
 
 	if len(origin) != 0 {
-		// Skip processing of any `https` scheme URL that has not expressly been configured.
-		if originURL, err = url.ParseRequestURI(string(origin)); err != nil || (originURL.Scheme != strProtoHTTPS && p.origins == nil) {
+		// Parse and validate the origin URL
+		if originURL, err = url.ParseRequestURI(string(origin)); err != nil {
 			return
+		}
+
+		// Enforce HTTPS except for localhost development scenarios
+		if originURL.Scheme != strProtoHTTPS {
+			hostname := originURL.Hostname()
+			// Allow HTTP only for localhost addresses (supports development)
+			if !isLocalhostHostname(hostname) {
+				return
+			}
 		}
 	}
 
@@ -290,6 +299,9 @@ func (p *CORSPolicy) handleCORS(ctx *fasthttp.RequestCtx) {
 			allowedOrigin = headerValueOriginWildcard
 		} else if bytes.Equal(p.origins[0], origin) {
 			allowedOrigin = origin
+		} else if originURL != nil && originURL.Scheme != strProtoHTTPS && isLocalhostHostname(originURL.Hostname()) {
+			// Allow localhost HTTP origins even if not explicitly configured
+			allowedOrigin = origin
 		}
 	default:
 		for i := 0; i < len(p.origins); i++ {
@@ -302,6 +314,12 @@ func (p *CORSPolicy) handleCORS(ctx *fasthttp.RequestCtx) {
 
 				break
 			}
+		}
+
+		// If not found in configured origins, check if it's a localhost HTTP origin
+		if len(allowedOrigin) == 0 && originURL != nil && originURL.Scheme != strProtoHTTPS && isLocalhostHostname(originURL.Hostname()) {
+			// Allow localhost HTTP origins even if not explicitly configured
+			allowedOrigin = origin
 		}
 
 		if len(allowedOrigin) == 0 {
@@ -367,4 +385,13 @@ func (p *CORSPolicy) handleAllowedHeaders(ctx *fasthttp.RequestCtx) {
 	default:
 		ctx.Response.Header.SetBytesKV(headerAccessControlAllowHeaders, p.headers)
 	}
+}
+
+// isLocalhostHostname checks if the hostname represents a localhost address.
+// This is used to allow HTTP origins for local development while enforcing HTTPS for remote origins.
+func isLocalhostHostname(hostname string) bool {
+	return hostname == "localhost" ||
+		hostname == "127.0.0.1" ||
+		hostname == "::1" ||
+		strings.HasPrefix(hostname, "127.")
 }
